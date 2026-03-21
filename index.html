@@ -1,0 +1,1411 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Depo Bulucu" />
+  <meta name="description" content="Depo rafı arama uygulaması" />
+
+  <title>Depo Bulucu</title>
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Apple Touch Icons -->
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-startup-image" href="icons/icon-512.png" />
+
+  <!-- Google Fonts: Barlow (UI) + JetBrains Mono (codes) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;800&display=swap" rel="stylesheet" />
+
+  <!-- SheetJS (xlsx parsing) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- Dexie.js (IndexedDB wrapper) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dexie/3.2.4/dexie.min.js"></script>
+
+  <style>
+    /* ═══════════════════════════════════════════
+       CSS VARIABLES & RESET
+    ═══════════════════════════════════════════ */
+    :root {
+      --bg-base:       #0f172a;   /* slate-900 */
+      --bg-surface:    #1e293b;   /* slate-800 */
+      --bg-raised:     #263244;   /* slightly lighter surface */
+      --border:        #334155;   /* slate-700 */
+      --border-light:  #475569;   /* slate-600 */
+      --text-primary:  #f1f5f9;   /* slate-100 */
+      --text-secondary:#94a3b8;   /* slate-400 */
+      --text-muted:    #64748b;   /* slate-500 */
+      --accent-amber:  #f59e0b;   /* amber-500 — result highlight */
+      --accent-blue:   #3b82f6;   /* blue-500 — interactive */
+      --accent-green:  #10b981;   /* emerald-500 — success */
+      --accent-red:    #ef4444;   /* red-500 — error */
+      --shadow-lg:     0 10px 40px rgba(0,0,0,.5);
+      --radius-sm:     8px;
+      --radius-md:     14px;
+      --radius-lg:     20px;
+      --font-ui:       'Barlow', sans-serif;
+      --font-mono:     'JetBrains Mono', monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      -webkit-text-size-adjust: 100%;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: var(--font-ui);
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100dvh;
+      min-height: 100vh;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      overflow-x: hidden;
+    }
+
+    /* Subtle grid texture on background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(59,130,246,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59,130,246,.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ═══════════════════════════════════════════
+       LAYOUT
+    ═══════════════════════════════════════════ */
+    .app-wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 16px 16px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ═══════════════════════════════════════════
+       HEADER
+    ═══════════════════════════════════════════ */
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .app-header .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, var(--accent-blue), #6366f1);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .brand-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -.3px;
+    }
+
+    .brand-subtitle {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+
+    .db-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 99px;
+      white-space: nowrap;
+    }
+
+    .db-status .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background .3s;
+    }
+
+    .db-status.loaded .dot { background: var(--accent-green); }
+    .db-status.empty .dot { background: var(--accent-red); }
+
+    /* ═══════════════════════════════════════════
+       SECTION CARDS
+    ═══════════════════════════════════════════ */
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ═══════════════════════════════════════════
+       SEARCH INPUT
+    ═══════════════════════════════════════════ */
+    .search-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 16px;
+      font-size: 20px;
+      color: var(--text-muted);
+      pointer-events: none;
+      transition: color .2s;
+      z-index: 1;
+    }
+
+    .search-input {
+      width: 100%;
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 600;
+      line-height: 1;
+      color: var(--text-primary);
+      background: var(--bg-base);
+      border: 2px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 18px 50px 18px 50px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+      -webkit-appearance: none;
+      appearance: none;
+      letter-spacing: 1px;
+    }
+
+    /* Tarayıcının kendi X butonunu kapat */
+    .search-input::-webkit-search-decoration,
+    .search-input::-webkit-search-cancel-button,
+    .search-input::-webkit-search-results-button,
+    .search-input::-webkit-search-results-decoration { display: none; }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+      font-weight: 400;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 3px rgba(59,130,246,.2);
+    }
+
+    .search-clear {
+      position: absolute;
+      right: 14px;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--border-light);
+      border: none;
+      border-radius: 50%;
+      color: var(--text-secondary);
+      font-size: 14px;
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s, background .2s;
+    }
+
+    .search-clear:hover { background: var(--accent-red); color: #fff; }
+    .search-clear.visible { opacity: 1; pointer-events: all; }
+
+    .search-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 10px;
+      text-align: center;
+    }
+
+    /* ═══════════════════════════════════════════
+       RESULT CARD — THE HERO ELEMENT
+    ═══════════════════════════════════════════ */
+    #result-section {
+      transition: opacity .25s, transform .25s;
+    }
+
+    #result-section.hidden {
+      opacity: 0;
+      transform: translateY(6px);
+      pointer-events: none;
+      visibility: hidden;
+      height: 0;
+      overflow: hidden;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+
+    /* Found state */
+    .result-found {
+      background: linear-gradient(135deg, #1a1200, #2d1f00);
+      border: 2px solid var(--accent-amber);
+      border-radius: var(--radius-lg);
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .result-found-header {
+      background: var(--accent-amber);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .result-found-header .label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #1a1200;
+    }
+
+    .result-found-header .material-chip {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a1200;
+      background: rgba(0,0,0,.12);
+      padding: 3px 10px;
+      border-radius: 99px;
+    }
+
+    .result-bin {
+      font-family: var(--font-mono);
+      font-size: clamp(40px, 14vw, 68px);
+      font-weight: 800;
+      color: var(--accent-amber);
+      text-align: center;
+      padding: 20px 20px 14px;
+      letter-spacing: 2px;
+      line-height: 1.1;
+      word-break: break-all;
+      text-shadow: 0 0 40px rgba(245,158,11,.3);
+    }
+
+    .result-bin.no-bin {
+      font-size: 22px;
+      font-family: var(--font-ui);
+      font-weight: 600;
+      color: var(--text-muted);
+      padding: 24px 20px;
+    }
+
+    .result-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: rgba(245,158,11,.15);
+      border-top: 1px solid rgba(245,158,11,.2);
+    }
+
+    .result-meta-item {
+      background: #1a1200;
+      padding: 12px 16px;
+    }
+
+    .result-meta-item:first-child {
+      border-radius: 0 0 0 var(--radius-lg);
+    }
+    .result-meta-item:last-child {
+      border-radius: 0 0 var(--radius-lg) 0;
+    }
+
+    .meta-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: rgba(245,158,11,.6);
+      margin-bottom: 4px;
+    }
+
+    .meta-value {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .meta-value.mono {
+      font-family: var(--font-mono);
+    }
+
+    /* Not found state */
+    .result-notfound {
+      background: linear-gradient(135deg, #1a0000, #2d0000);
+      border: 2px solid rgba(239,68,68,.4);
+      border-radius: var(--radius-lg);
+      padding: 24px 20px;
+      text-align: center;
+    }
+
+    .result-notfound .nf-icon { font-size: 32px; margin-bottom: 10px; }
+    .result-notfound .nf-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent-red);
+      margin-bottom: 6px;
+    }
+
+    /* ═══════════════════════════════════════════
+       SUGGESTION LIST (startsWith candidates)
+    ═══════════════════════════════════════════ */
+    .suggestions-wrap {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .suggestions-header {
+      padding: 10px 16px;
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .suggestions-header .count-badge {
+      background: var(--accent-blue);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 99px;
+    }
+
+    .suggestion-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .15s;
+      -webkit-tap-highlight-color: transparent;
+      gap: 12px;
+    }
+
+    .suggestion-item:last-child { border-bottom: none; }
+
+    .suggestion-item:active,
+    .suggestion-item:hover { background: var(--bg-raised); }
+
+    .suggestion-left {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .suggestion-code {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1.2;
+    }
+
+    /* Highlight the typed portion */
+    .suggestion-code mark {
+      background: transparent;
+      color: var(--accent-blue);
+      font-weight: 800;
+    }
+
+    .suggestion-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .suggestion-bin {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-amber);
+      background: rgba(245,158,11,.1);
+      border: 1px solid rgba(245,158,11,.25);
+      padding: 4px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .suggestion-bin.empty {
+      color: var(--text-muted);
+      background: var(--bg-base);
+      border-color: var(--border);
+    }
+
+    .suggestions-more {
+      padding: 10px 16px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      background: var(--bg-raised);
+    }
+    }
+    .result-notfound .nf-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* ═══════════════════════════════════════════
+       UPLOAD SECTION
+    ═══════════════════════════════════════════ */
+    .upload-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: var(--bg-raised);
+      border: 2px dashed var(--border-light);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      color: var(--text-secondary);
+      font-family: var(--font-ui);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s, border-color .2s, color .2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .upload-btn:hover, .upload-btn:active {
+      background: rgba(59,130,246,.08);
+      border-color: var(--accent-blue);
+      color: var(--text-primary);
+    }
+
+    .upload-btn .upload-icon { font-size: 22px; }
+
+    #file-input { display: none; }
+
+    /* Progress bar */
+    .progress-wrap {
+      margin-top: 14px;
+      display: none;
+    }
+    .progress-wrap.visible { display: block; }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .progress-bar-track {
+      background: var(--bg-base);
+      border-radius: 99px;
+      height: 8px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--accent-blue), #6366f1);
+      width: 0%;
+      transition: width .3s ease;
+    }
+
+    /* Success toast */
+    .toast {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(16,185,129,.12);
+      border: 1px solid rgba(16,185,129,.3);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      margin-top: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-green);
+      opacity: 0;
+      transform: translateY(-4px);
+      transition: opacity .3s, transform .3s;
+    }
+    .toast.show { opacity: 1; transform: none; }
+
+    .error-toast {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(239,68,68,.1);
+      border: 1px solid rgba(239,68,68,.3);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      margin-top: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-red);
+      opacity: 0;
+      transform: translateY(-4px);
+      transition: opacity .3s, transform .3s;
+    }
+    .error-toast.show { opacity: 1; transform: none; }
+
+    /* Upload info row */
+    .upload-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: var(--bg-base);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      font-size: 12px;
+    }
+
+    .upload-info .info-label { color: var(--text-muted); font-weight: 500; }
+    .upload-info .info-value { color: var(--text-secondary); font-weight: 600; font-family: var(--font-mono); font-size: 11px; }
+
+    /* ═══════════════════════════════════════════
+       PWA INSTALL PROMPT
+    ═══════════════════════════════════════════ */
+    .install-hint {
+      border: 1px solid rgba(99,102,241,.3);
+      background: rgba(99,102,241,.06);
+      border-radius: var(--radius-md);
+      padding: 16px;
+    }
+
+    .install-hint .hint-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #a5b4fc;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .install-hint ol {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .install-hint li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .step-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(99,102,241,.25);
+      color: #a5b4fc;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* ═══════════════════════════════════════════
+       STATS ROW
+    ═══════════════════════════════════════════ */
+    .stats-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-cell {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--text-primary);
+      line-height: 1.1;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    /* ═══════════════════════════════════════════
+       FOOTER
+    ═══════════════════════════════════════════ */
+    .app-footer {
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding-top: 4px;
+    }
+
+    /* ═══════════════════════════════════════════
+       LOADING STATE
+    ═══════════════════════════════════════════ */
+    .skeleton {
+      background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-raised) 50%, var(--bg-surface) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+      border-radius: var(--radius-sm);
+    }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ═══════════════════════════════════════════
+       MISC
+    ═══════════════════════════════════════════ */
+    .hidden { display: none !important; }
+    .visually-hidden { opacity: 0; pointer-events: none; }
+
+    /* Pulse animation for dot when loading */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .4; }
+    }
+    .dot-pulse { animation: pulse 1s infinite; }
+
+    /* Focus ring for accessibility */
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid var(--accent-blue);
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app-wrapper">
+
+    <!-- ── HEADER ──────────────────────────────── -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">🏭</div>
+        <div class="brand-text">
+          <span class="brand-title">Depo Bulucu</span>
+          <span class="brand-subtitle">Raf Konum Sistemi</span>
+        </div>
+      </div>
+      <div class="db-status empty" id="db-status">
+        <span class="dot"></span>
+        <span id="db-status-text">Veri Yok</span>
+      </div>
+    </header>
+
+    <!-- ── STATS ROW ───────────────────────────── -->
+    <div class="stats-row" id="stats-row">
+      <div class="stat-cell">
+        <div class="stat-value" id="stat-total">—</div>
+        <div class="stat-label">Toplam</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value" id="stat-binned">—</div>
+        <div class="stat-label">Raflı</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value" id="stat-date">—</div>
+        <div class="stat-label">Güncelleme</div>
+      </div>
+    </div>
+
+    <!-- ── SEARCH SECTION ─────────────────────── -->
+    <div class="card" id="search-section">
+      <div class="section-label">🔍 Malzeme Ara</div>
+
+      <div class="search-wrap">
+        <span class="search-icon">🔢</span>
+        <input
+          type="text"
+          id="search-input"
+          class="search-input"
+          inputmode="numeric"
+          pattern="[0-9]*"
+          placeholder="Malzeme Kodu..."
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          aria-label="Malzeme kodu ara"
+        />
+        <button class="search-clear" id="search-clear" aria-label="Temizle">✕</button>
+      </div>
+
+      <p class="search-hint" id="search-hint">Kodu girin, otomatik arama yapar</p>
+    </div>
+
+    <!-- ── RESULT SECTION ─────────────────────── -->
+    <div id="result-section" class="hidden"></div>
+
+    <!-- ── UPLOAD SECTION ─────────────────────── -->
+    <div class="card">
+      <div class="section-label">📂 Veri Yükle</div>
+
+      <label class="upload-btn" for="file-input">
+        <span class="upload-icon">📤</span>
+        <span>Excel veya CSV Seç (.xlsx / .csv)</span>
+      </label>
+      <input type="file" id="file-input" accept=".xlsx,.csv" />
+
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-header">
+          <span id="progress-label">Veriler işleniyor...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progress-fill"></div>
+        </div>
+      </div>
+
+      <div class="toast" id="success-toast">
+        ✅ <span id="success-msg">Veri başarıyla yüklendi.</span>
+      </div>
+
+      <div class="error-toast" id="error-toast">
+        ⚠️ <span id="error-msg">Bir hata oluştu.</span>
+      </div>
+
+      <div class="upload-info" id="upload-info" style="display:none">
+        <span class="info-label">Dosya</span>
+        <span class="info-value" id="upload-filename">—</span>
+      </div>
+    </div>
+
+    <!-- ── INSTALL HINT ───────────────────────── -->
+    <div class="install-hint" id="install-hint">
+      <div class="hint-title">📱 Ana Ekrana Ekle (iPhone)</div>
+      <ol>
+        <li><span class="step-num">1</span> Safari'de bu sayfayı aç</li>
+        <li><span class="step-num">2</span> Alttaki <strong>Paylaş</strong> butonuna dokun (⎋)</li>
+        <li><span class="step-num">3</span> "<strong>Ana Ekrana Ekle</strong>" seç</li>
+        <li><span class="step-num">4</span> Uygulama internet olmadan da çalışır ✓</li>
+      </ol>
+    </div>
+
+    <!-- ── FOOTER ─────────────────────────────── -->
+    <footer class="app-footer">
+      Depo Bulucu · PWA v1.0 · Veriler cihazda saklanır
+    </footer>
+
+  </div><!-- /app-wrapper -->
+
+  <script>
+  /* ═══════════════════════════════════════════════════════════
+     SERVICE WORKER REGISTRATION
+  ═══════════════════════════════════════════════════════════ */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then(reg => console.log('[SW] Registered:', reg.scope))
+        .catch(err => console.error('[SW] Error:', err));
+    });
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     DEXIE DATABASE SETUP
+  ═══════════════════════════════════════════════════════════ */
+  const db = new Dexie('DepoBulucuDB');
+
+  /**
+   * Schema:
+   *  materials: material (indexed), description, bin, stock, unit
+   *  meta: key/value store for last-update info
+   */
+  db.version(1).stores({
+    materials: 'material, bin',
+    meta: 'key'
+  });
+
+  /* ═══════════════════════════════════════════════════════════
+     DOM REFS
+  ═══════════════════════════════════════════════════════════ */
+  const searchInput   = document.getElementById('search-input');
+  const searchClear   = document.getElementById('search-clear');
+  const searchHint    = document.getElementById('search-hint');
+  const resultSection = document.getElementById('result-section');
+  const fileInput     = document.getElementById('file-input');
+  const progressWrap  = document.getElementById('progress-wrap');
+  const progressFill  = document.getElementById('progress-fill');
+  const progressLabel = document.getElementById('progress-label');
+  const progressPct   = document.getElementById('progress-pct');
+  const successToast  = document.getElementById('success-toast');
+  const successMsg    = document.getElementById('success-msg');
+  const errorToast    = document.getElementById('error-toast');
+  const errorMsg      = document.getElementById('error-msg');
+  const dbStatus      = document.getElementById('db-status');
+  const dbStatusText  = document.getElementById('db-status-text');
+  const statTotal     = document.getElementById('stat-total');
+  const statBinned    = document.getElementById('stat-binned');
+  const statDate      = document.getElementById('stat-date');
+  const uploadInfo    = document.getElementById('upload-info');
+  const uploadFilename= document.getElementById('upload-filename');
+
+  /* ═══════════════════════════════════════════════════════════
+     INIT — LOAD STATS ON PAGE LOAD
+  ═══════════════════════════════════════════════════════════ */
+  async function initApp() {
+    try {
+      const total  = await db.materials.count();
+      const binned = await db.materials.where('bin').notEqual('').count();
+      const meta   = await db.meta.get('lastUpdate');
+
+      if (total > 0) {
+        updateStats(total, binned, meta ? meta.value : null);
+        setDbStatus('loaded', `${total} Kayıt`);
+      } else {
+        setDbStatus('empty', 'Veri Yok');
+        updateStats(null, null, null);
+      }
+    } catch (e) {
+      console.error('initApp error:', e);
+    }
+  }
+
+  function updateStats(total, binned, date) {
+    statTotal.textContent  = total  != null ? total.toLocaleString('tr-TR') : '—';
+    statBinned.textContent = binned != null ? binned.toLocaleString('tr-TR') : '—';
+    if (date) {
+      const d = new Date(date);
+      statDate.textContent = d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit' });
+    } else {
+      statDate.textContent = '—';
+    }
+  }
+
+  function setDbStatus(state, text) {
+    dbStatus.className = 'db-status ' + state;
+    dbStatusText.textContent = text;
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     SEARCH — DEBOUNCED, AS-YOU-TYPE
+  ═══════════════════════════════════════════════════════════ */
+  let searchTimer = null;
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim();
+
+    // Toggle clear button
+    searchClear.classList.toggle('visible', q.length > 0);
+
+    if (!q) {
+      hideResult();
+      searchHint.textContent = 'Kodu girin, otomatik arama yapar';
+      return;
+    }
+
+    searchHint.textContent = 'Aranıyor...';
+    clearTimeout(searchTimer);
+
+    // Debounce: wait 180ms after last keystroke
+    searchTimer = setTimeout(() => doSearch(q), 180);
+  });
+
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    searchClear.classList.remove('visible');
+    hideResult();
+    searchHint.textContent = 'Kodu girin, otomatik arama yapar';
+    searchInput.focus();
+  });
+
+  async function doSearch(query) {
+    try {
+      const total = await db.materials.count();
+      if (total === 0) {
+        showHint('⚠️ Lütfen önce Excel dosyası yükleyin.');
+        hideResult();
+        return;
+      }
+
+      // 1. Exact match — only this triggers the full result card
+      const exact = await db.materials.get({ material: query });
+      if (exact) {
+        showFound(exact, query);
+        searchHint.textContent = '';
+        return;
+      }
+
+      // 2. StartsWith — collect ALL candidates (max 50 for perf), show list
+      const candidates = await db.materials
+        .where('material')
+        .startsWith(query)
+        .limit(50)
+        .toArray();
+
+      if (candidates.length > 0) {
+        showSuggestions(candidates, query);
+        searchHint.textContent = '';
+      } else {
+        showNotFound(query);
+        searchHint.textContent = '';
+      }
+    } catch (e) {
+      console.error('Search error:', e);
+      showHint('Arama hatası.');
+    }
+  }
+
+  /**
+   * Show a tappable list of startsWith candidates.
+   * Tapping any row fills the input with that code and shows its full result card.
+   */
+  function showSuggestions(candidates, query) {
+    const SHOW_MAX = 8; // show at most 8 rows
+    const visible  = candidates.slice(0, SHOW_MAX);
+    const more     = candidates.length - visible.length;
+
+    const rows = visible.map(rec => {
+      const hasBin = rec.bin && rec.bin.trim() !== '';
+      const binHtml = hasBin
+        ? `<span class="suggestion-bin">${escHtml(rec.bin)}</span>`
+        : `<span class="suggestion-bin empty">— Raf Yok</span>`;
+
+      // Bold the portion the user typed, normal for the rest
+      const code     = escHtml(rec.material);
+      const qLen     = query.length;
+      const codeHtml = `<mark>${code.slice(0, qLen)}</mark>${code.slice(qLen)}`;
+
+      return `
+        <div class="suggestion-item" data-material="${escHtml(rec.material)}">
+          <div class="suggestion-left">
+            <span class="suggestion-code">${codeHtml}</span>
+            <span class="suggestion-desc">${escHtml(rec.description || '—')}</span>
+          </div>
+          ${binHtml}
+        </div>`;
+    }).join('');
+
+    const moreRow = more > 0
+      ? `<div class="suggestions-more">+ ${more} sonuç daha — kodu daraltın</div>`
+      : '';
+
+    resultSection.innerHTML = `
+      <div class="suggestions-wrap">
+        <div class="suggestions-header">
+          <span>Olası Eşleşmeler</span>
+          <span class="count-badge">${candidates.length}</span>
+        </div>
+        ${rows}
+        ${moreRow}
+      </div>`;
+
+    resultSection.classList.remove('hidden');
+
+    // Tap a row → fill input + show exact result
+    resultSection.querySelectorAll('.suggestion-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const code = el.dataset.material;
+        searchInput.value = code;
+        searchClear.classList.add('visible');
+        showFound(candidates.find(r => r.material === code), code);
+        searchHint.textContent = '';
+      });
+    });
+  }
+
+  function showHint(msg) {
+    searchHint.textContent = msg;
+  }
+
+  function hideResult() {
+    resultSection.classList.add('hidden');
+    // Clear content after transition finishes
+    setTimeout(() => { if (resultSection.classList.contains('hidden')) resultSection.innerHTML = ''; }, 260);
+  }
+
+  /**
+   * Render the "FOUND" result card
+   */
+  function showFound(record, query) {
+    const hasBin = record.bin && record.bin.trim() !== '';
+    const stock  = record.stock != null ? `${parseFloat(record.stock).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} ${record.unit || ''}` : '—';
+
+    resultSection.innerHTML = `
+      <div class="result-found">
+        <div class="result-found-header">
+          <span class="label">📍 Raf Konumu</span>
+          <span class="material-chip">#${escHtml(record.material)}</span>
+        </div>
+
+        <div class="result-bin ${hasBin ? '' : 'no-bin'}">
+          ${hasBin ? escHtml(record.bin) : '⊘ Raf Atanmamış'}
+        </div>
+
+        <div class="result-meta">
+          <div class="result-meta-item">
+            <div class="meta-label">Malzeme Adı</div>
+            <div class="meta-value" title="${escHtml(record.description || '')}">
+              ${escHtml(record.description || '—')}
+            </div>
+          </div>
+          <div class="result-meta-item">
+            <div class="meta-label">Stok Miktarı</div>
+            <div class="meta-value mono">${escHtml(stock)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    resultSection.classList.remove('hidden');
+    // Smooth scroll to result on mobile
+    setTimeout(() => resultSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+  }
+
+  /**
+   * Render the "NOT FOUND" state
+   */
+  function showNotFound(query) {
+    resultSection.innerHTML = `
+      <div class="result-notfound">
+        <div class="nf-icon">🔎</div>
+        <div class="nf-title">Bulunamadı</div>
+        <div class="nf-sub">"${escHtml(query)}" kodlu malzeme veritabanında yok.</div>
+      </div>
+    `;
+    resultSection.classList.remove('hidden');
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     FILE UPLOAD & EXCEL PARSING
+  ═══════════════════════════════════════════════════════════ */
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Reset UI
+    hideToast(successToast);
+    hideToast(errorToast);
+    hideResult();
+    searchInput.value = '';
+    searchClear.classList.remove('visible');
+
+    showProgress(true);
+    setProgress(5, 'Dosya okunuyor...');
+
+    try {
+      const rows = await parseFile(file);
+
+      if (!rows || rows.length === 0) {
+        throw new Error('Dosyada geçerli veri bulunamadı. Sütun başlıkları kontrol edin.');
+      }
+
+      setProgress(35, `${rows.length} kayıt bulundu, veritabanına yazılıyor...`);
+
+      // Clear old data
+      await db.materials.clear();
+
+      // Bulk insert in chunks for progress feedback
+      const CHUNK = 250;
+      let inserted = 0;
+
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const chunk = rows.slice(i, i + CHUNK);
+        await db.materials.bulkPut(chunk);
+        inserted += chunk.length;
+        const pct = 35 + Math.round((inserted / rows.length) * 60);
+        setProgress(pct, `Yükleniyor... ${inserted} / ${rows.length}`);
+      }
+
+      // Save metadata
+      await db.meta.put({ key: 'lastUpdate', value: new Date().toISOString() });
+      await db.meta.put({ key: 'fileName', value: file.name });
+      await db.meta.put({ key: 'rowCount', value: rows.length });
+
+      setProgress(100, 'Tamamlandı!');
+
+      setTimeout(async () => {
+        showProgress(false);
+        const binned = rows.filter(r => r.bin && r.bin.trim() !== '').length;
+
+        showSuccess(`✅ ${rows.length.toLocaleString('tr-TR')} malzeme yüklendi (${binned.toLocaleString('tr-TR')} raflı).`);
+        setDbStatus('loaded', `${rows.length} Kayıt`);
+        updateStats(rows.length, binned, new Date().toISOString());
+
+        uploadInfo.style.display = 'flex';
+        uploadFilename.textContent = file.name;
+      }, 600);
+
+    } catch (err) {
+      console.error('Upload error:', err);
+      showProgress(false);
+      showError(err.message || 'Dosya işlenirken hata oluştu.');
+    } finally {
+      // Reset file input so same file can be selected again
+      fileInput.value = '';
+    }
+  });
+
+  /**
+   * Parse XLSX or CSV file using SheetJS.
+   * Returns array of { material, description, bin, stock, unit }
+   */
+  function parseFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+
+          // Use first sheet
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+
+          // Convert to array of objects
+          const raw = XLSX.utils.sheet_to_json(sheet, {
+            defval: '',
+            raw: false  // Convert everything to strings
+          });
+
+          if (!raw || raw.length === 0) {
+            return reject(new Error('Sayfa boş.'));
+          }
+
+          // Detect column mapping (handle slight header variations)
+          const firstRow = raw[0];
+          const keys = Object.keys(firstRow);
+
+          /**
+           * findCol — iki geçişli sütun eşleştirici:
+           *   Geçiş 1: Tam eşleşme (ör. 'storage bin' === 'storage bin')
+           *   Geçiş 2: İçerir eşleşmesi (ör. 'storage bin' içinde 'bin')
+           * Bu sayede 'Storage Location' hiçbir zaman 'Storage Bin' yerine seçilmez.
+           */
+          const keysLower = keys.map(k => k.toLowerCase().trim());
+
+          const findCol = (...candidates) => {
+            // Geçiş 1 — tam eşleşme
+            for (const c of candidates) {
+              const idx = keysLower.indexOf(c.toLowerCase().trim());
+              if (idx !== -1) return keys[idx];
+            }
+            // Geçiş 2 — kısmi eşleşme
+            for (const c of candidates) {
+              const cLow = c.toLowerCase().trim();
+              const idx = keysLower.findIndex(k => k.includes(cLow));
+              if (idx !== -1) return keys[idx];
+            }
+            return null;
+          };
+
+          // 'location' kaldırıldı — 'Storage Location' sütunuyla karışmasın
+          const colMaterial    = findCol('material', 'malzeme', 'code', 'kod');
+          const colDescription = findCol('material description', 'description', 'açıklama', 'tanım', 'tanim', 'name');
+          const colBin         = findCol('storage bin', 'storage_bin', 'bin', 'raf', 'konum');
+          const colStock       = findCol('unrestricted', 'stok', 'miktar', 'quantity', 'qty');
+          const colUnit        = findCol('base unit of measure', 'base unit', 'birim', 'unit', 'uom');
+
+          if (!colMaterial) {
+            return reject(new Error('"Material" sütunu bulunamadı. Lütfen SAP formatında bir dosya yükleyin.'));
+          }
+
+          // Map rows
+          const records = [];
+          const seenMaterials = new Set();
+
+          for (const row of raw) {
+            const mat = String(row[colMaterial] || '').trim();
+            if (!mat || mat === '') continue;
+
+            // Skip duplicate material codes (keep first occurrence)
+            if (seenMaterials.has(mat)) continue;
+            seenMaterials.add(mat);
+
+            records.push({
+              material:    mat,
+              description: colDescription ? String(row[colDescription] || '').trim() : '',
+              bin:         colBin         ? String(row[colBin] || '').trim() : '',
+              stock:       colStock       ? String(row[colStock] || '').trim() : '',
+              unit:        colUnit        ? String(row[colUnit] || '').trim() : '',
+            });
+          }
+
+          if (records.length === 0) {
+            return reject(new Error('Geçerli kayıt bulunamadı.'));
+          }
+
+          resolve(records);
+        } catch (err) {
+          reject(new Error('Dosya ayrıştırma hatası: ' + err.message));
+        }
+      };
+
+      reader.onerror = () => reject(new Error('Dosya okunamadı.'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     UI HELPERS
+  ═══════════════════════════════════════════════════════════ */
+  function showProgress(visible) {
+    progressWrap.classList.toggle('visible', visible);
+  }
+
+  function setProgress(pct, label) {
+    progressFill.style.width = pct + '%';
+    progressPct.textContent  = pct + '%';
+    progressLabel.textContent = label;
+  }
+
+  function showSuccess(msg) {
+    hideToast(errorToast);
+    successMsg.textContent = msg;
+    successToast.classList.add('show');
+    setTimeout(() => successToast.classList.remove('show'), 5000);
+  }
+
+  function showError(msg) {
+    hideToast(successToast);
+    errorMsg.textContent = msg;
+    errorToast.classList.add('show');
+    setTimeout(() => errorToast.classList.remove('show'), 7000);
+  }
+
+  function hideToast(el) {
+    el.classList.remove('show');
+  }
+
+  /** Escape HTML special chars to prevent XSS */
+  function escHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     BOOT
+  ═══════════════════════════════════════════════════════════ */
+  initApp();
+
+  // Auto-focus search on load (after short delay for iOS)
+  setTimeout(() => {
+    // Only auto-focus if not on a device that would pop the keyboard unexpectedly
+    if (window.innerWidth > 768) {
+      searchInput.focus();
+    }
+  }, 300);
+
+  </script>
+</body>
+</html>
