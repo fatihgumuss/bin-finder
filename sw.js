@@ -10,13 +10,15 @@
  *  - Bilinmeyen istekler → Network-First (güvenli fallback)
  */
 
-const CACHE_NAME = 'depo-bulucu-v1.0.1';
+const CACHE_NAME = 'depo-bulucu-v1.1.0';
 
 // App shell ve CDN kaynaklarını önbelleğe al
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
 
   // SheetJS (Excel parser)
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',

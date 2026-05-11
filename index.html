@@ -16,8 +16,8 @@
   <link rel="manifest" href="manifest.json" />
 
   <!-- Apple Touch Icons -->
-  <link rel="apple-touch-icon" href="icons/icon-192.png" />
-  <link rel="apple-touch-startup-image" href="icons/icon-512.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="apple-touch-startup-image" href="icon-512.png" />
 
   <!-- Google Fonts: Barlow (UI) + JetBrains Mono (codes) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -392,6 +392,38 @@
       border-radius: 0 0 var(--radius-lg) 0;
     }
 
+    .result-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: rgba(245,158,11,.15);
+      border-top: 1px solid rgba(245,158,11,.2);
+    }
+
+    .result-action {
+      border: 0;
+      background: #241700;
+      color: var(--accent-amber);
+      padding: 12px 14px;
+      font-family: var(--font-ui);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .result-action:hover,
+    .result-action:active {
+      background: rgba(245,158,11,.22);
+      color: #fff;
+    }
+
+    .result-action:disabled {
+      color: var(--text-muted);
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
     .meta-label {
       font-size: 10px;
       font-weight: 700;
@@ -539,7 +571,33 @@
       border-top: 1px solid var(--border);
       background: var(--bg-raised);
     }
+
+    .suggestion-stock {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      white-space: nowrap;
     }
+
+    .recent-wrap {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .recent-header {
+      padding: 10px 16px;
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
     .result-notfound .nf-sub {
       font-size: 13px;
       color: var(--text-muted);
@@ -835,19 +893,18 @@
           type="text"
           id="search-input"
           class="search-input"
-          inputmode="numeric"
-          pattern="[0-9]*"
-          placeholder="Malzeme Kodu..."
+          inputmode="search"
+          placeholder="Kod veya kelime ara..."
           autocomplete="off"
           autocorrect="off"
           autocapitalize="off"
           spellcheck="false"
-          aria-label="Malzeme kodu ara"
+          aria-label="Kod veya kelime ara"
         />
         <button class="search-clear" id="search-clear" aria-label="Temizle">✕</button>
       </div>
 
-      <p class="search-hint" id="search-hint">Kodu girin, otomatik arama yapar</p>
+      <p class="search-hint" id="search-hint">Kod, malzeme adı veya anahtar kelime yazın</p>
     </div>
 
     <!-- ── RESULT SECTION ─────────────────────── -->
@@ -968,6 +1025,7 @@
       if (total > 0) {
         updateStats(total, binned, meta ? meta.value : null);
         setDbStatus('loaded', `${total} Kayıt`);
+        showRecentSearches();
       } else {
         setDbStatus('empty', 'Veri Yok');
         updateStats(null, null, null);
@@ -996,6 +1054,9 @@
   /* ═══════════════════════════════════════════════════════════
      SEARCH — DEBOUNCED, AS-YOU-TYPE
   ═══════════════════════════════════════════════════════════ */
+  const SEARCH_HINT_TEXT = 'Kod, malzeme adı veya anahtar kelime yazın';
+  const RECENT_SEARCHES_KEY = 'depoBulucuRecentMaterials';
+  const RECENT_LIMIT = 5;
   let searchTimer = null;
 
   searchInput.addEventListener('input', () => {
@@ -1005,8 +1066,9 @@
     searchClear.classList.toggle('visible', q.length > 0);
 
     if (!q) {
-      hideResult();
-      searchHint.textContent = 'Kodu girin, otomatik arama yapar';
+      clearTimeout(searchTimer);
+      searchHint.textContent = SEARCH_HINT_TEXT;
+      showRecentSearches();
       return;
     }
 
@@ -1014,16 +1076,62 @@
     clearTimeout(searchTimer);
 
     // Debounce: wait 180ms after last keystroke
-    searchTimer = setTimeout(() => doSearch(q), 180);
+    searchTimer = setTimeout(() => doSmartSearch(q), 180);
   });
 
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     searchClear.classList.remove('visible');
-    hideResult();
-    searchHint.textContent = 'Kodu girin, otomatik arama yapar';
+    searchHint.textContent = SEARCH_HINT_TEXT;
+    showRecentSearches();
     searchInput.focus();
   });
+
+  async function doSmartSearch(query) {
+    try {
+      const total = await db.materials.count();
+      if (total === 0) {
+        showHint('⚠️ Lütfen önce Excel dosyası yükleyin.');
+        hideResult();
+        return;
+      }
+
+      const exact = await db.materials.get({ material: query });
+      if (exact) {
+        showRecord(exact, true);
+        searchHint.textContent = '';
+        return;
+      }
+
+      let candidates = [];
+      let matchMode = 'keyword';
+
+      if (isLikelyCodeQuery(query)) {
+        candidates = await db.materials
+          .where('material')
+          .startsWith(query)
+          .limit(50)
+          .toArray();
+        matchMode = 'code';
+      }
+
+      if (candidates.length === 0) {
+        candidates = await findKeywordMatches(query);
+        matchMode = 'keyword';
+      }
+
+      if (candidates.length > 0) {
+        showSmartSuggestions(candidates, query, matchMode);
+        searchHint.textContent = '';
+      } else {
+        showSmartNotFound(query);
+        searchHint.textContent = '';
+      }
+    } catch (e) {
+      console.error('Search error:', e);
+      showHint('Arama hatası.');
+    }
+  }
 
   async function doSearch(query) {
     try {
@@ -1182,6 +1290,281 @@
     resultSection.classList.remove('hidden');
   }
 
+  function showSmartSuggestions(candidates, query, mode = 'code') {
+    const SHOW_MAX = 8;
+    const visible = candidates.slice(0, SHOW_MAX);
+    const more = candidates.length - visible.length;
+
+    const rows = visible.map(rec => {
+      const hasBin = rec.bin && rec.bin.trim() !== '';
+      const binHtml = hasBin
+        ? `<span class="suggestion-bin">${escHtml(rec.bin)}</span>`
+        : `<span class="suggestion-bin empty">— Raf Yok</span>`;
+      const codeHtml = mode === 'code'
+        ? highlightCodePrefix(rec.material, query)
+        : escHtml(rec.material);
+
+      return `
+        <div class="suggestion-item" data-material="${escHtml(rec.material)}">
+          <div class="suggestion-left">
+            <span class="suggestion-code">${codeHtml}</span>
+            <span class="suggestion-desc">${escHtml(rec.description || '—')}</span>
+            <span class="suggestion-stock">${escHtml(formatStock(rec))}</span>
+          </div>
+          ${binHtml}
+        </div>`;
+    }).join('');
+
+    const moreRow = more > 0
+      ? `<div class="suggestions-more">+ ${more} sonuç daha — aramayı daraltın</div>`
+      : '';
+    const title = mode === 'code' ? 'Olası Kod Eşleşmeleri' : 'Anahtar Kelime Sonuçları';
+
+    resultSection.innerHTML = `
+      <div class="suggestions-wrap">
+        <div class="suggestions-header">
+          <span>${title}</span>
+          <span class="count-badge">${candidates.length}</span>
+        </div>
+        ${rows}
+        ${moreRow}
+      </div>`;
+
+    resultSection.classList.remove('hidden');
+
+    resultSection.querySelectorAll('.suggestion-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const code = el.dataset.material;
+        searchInput.value = code;
+        searchClear.classList.add('visible');
+        showRecord(candidates.find(r => r.material === code), true);
+        searchHint.textContent = '';
+      });
+    });
+  }
+
+  async function findKeywordMatches(query) {
+    const normalizedQuery = normalizeSearchText(query);
+    const words = normalizedQuery.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return [];
+
+    const records = await db.materials.toArray();
+    return records
+      .filter(rec => {
+        const text = rec.searchText || normalizeSearchText(`${rec.material} ${rec.description}`);
+        return words.every(word => text.includes(word));
+      })
+      .sort((a, b) => scoreKeywordMatch(b, normalizedQuery, words) - scoreKeywordMatch(a, normalizedQuery, words))
+      .slice(0, 50);
+  }
+
+  function scoreKeywordMatch(rec, query, words) {
+    const desc = normalizeSearchText(rec.description);
+    const mat = normalizeSearchText(rec.material);
+    let score = 0;
+    if (desc === query || mat === query) score += 100;
+    if (desc.startsWith(query) || mat.startsWith(query)) score += 50;
+    for (const word of words) {
+      if (desc.split(/\s+/).includes(word)) score += 12;
+      else if (desc.includes(word)) score += 6;
+      if (mat.includes(word)) score += 8;
+    }
+    if (rec.bin && rec.bin.trim() !== '') score += 3;
+    return score;
+  }
+
+  function isLikelyCodeQuery(query) {
+    return /^[0-9][0-9A-Za-z._/-]*$/.test(query.trim());
+  }
+
+  function normalizeSearchText(value) {
+    return String(value || '')
+      .toLocaleLowerCase('tr-TR')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/ı/g, 'i')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim();
+  }
+
+  function highlightCodePrefix(material, query) {
+    const code = escHtml(material);
+    const qLen = query.length;
+    return `<mark>${code.slice(0, qLen)}</mark>${code.slice(qLen)}`;
+  }
+
+  function showRecord(record, remember = false) {
+    if (!record) return;
+    if (remember) saveRecentSearch(record.material);
+
+    const hasBin = record.bin && record.bin.trim() !== '';
+    const stock = formatStock(record).replace(/^Stok:\s*/, '') || '—';
+
+    resultSection.innerHTML = `
+      <div class="result-found">
+        <div class="result-found-header">
+          <span class="label">📍 Raf Konumu</span>
+          <span class="material-chip">#${escHtml(record.material)}</span>
+        </div>
+
+        <div class="result-bin ${hasBin ? '' : 'no-bin'}">
+          ${hasBin ? escHtml(record.bin) : '⊘ Raf Atanmamış'}
+        </div>
+
+        <div class="result-meta">
+          <div class="result-meta-item">
+            <div class="meta-label">Malzeme Adı</div>
+            <div class="meta-value" title="${escHtml(record.description || '')}">
+              ${escHtml(record.description || '—')}
+            </div>
+          </div>
+          <div class="result-meta-item">
+            <div class="meta-label">Stok Miktarı</div>
+            <div class="meta-value mono">${escHtml(stock)}</div>
+          </div>
+        </div>
+
+        <div class="result-actions">
+          <button class="result-action" type="button" data-copy="${escHtml(record.material)}">Kodu Kopyala</button>
+          <button class="result-action" type="button" data-copy="${escHtml(hasBin ? record.bin : '')}" ${hasBin ? '' : 'disabled'}>Rafı Kopyala</button>
+        </div>
+      </div>
+    `;
+
+    resultSection.classList.remove('hidden');
+    resultSection.querySelectorAll('[data-copy]').forEach(btn => {
+      btn.addEventListener('click', () => copyText(btn.dataset.copy));
+    });
+    setTimeout(() => resultSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+  }
+
+  function showSmartNotFound(query) {
+    resultSection.innerHTML = `
+      <div class="result-notfound">
+        <div class="nf-icon">🔎</div>
+        <div class="nf-title">Bulunamadı</div>
+        <div class="nf-sub">"${escHtml(query)}" ile eşleşen kod veya anahtar kelime bulunamadı.</div>
+      </div>
+    `;
+    resultSection.classList.remove('hidden');
+  }
+
+  async function showRecentSearches() {
+    const total = await db.materials.count();
+    if (total === 0) {
+      hideResult();
+      return;
+    }
+
+    const recentCodes = getRecentSearches();
+    if (recentCodes.length === 0) {
+      hideResult();
+      return;
+    }
+
+    const records = (await Promise.all(recentCodes.map(code => db.materials.get({ material: code }))))
+      .filter(Boolean);
+
+    if (records.length === 0) {
+      localStorage.removeItem(RECENT_SEARCHES_KEY);
+      hideResult();
+      return;
+    }
+
+    const validCodes = records.map(record => record.material);
+    if (validCodes.length !== recentCodes.length) {
+      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(validCodes));
+    }
+
+    const rows = records.map(rec => {
+      const hasBin = rec.bin && rec.bin.trim() !== '';
+      const binHtml = hasBin
+        ? `<span class="suggestion-bin">${escHtml(rec.bin)}</span>`
+        : `<span class="suggestion-bin empty">— Raf Yok</span>`;
+
+      return `
+        <div class="suggestion-item" data-material="${escHtml(rec.material)}">
+          <div class="suggestion-left">
+            <span class="suggestion-code">${escHtml(rec.material)}</span>
+            <span class="suggestion-desc">${escHtml(rec.description || '—')}</span>
+            <span class="suggestion-stock">${escHtml(formatStock(rec))}</span>
+          </div>
+          ${binHtml}
+        </div>`;
+    }).join('');
+
+    resultSection.innerHTML = `
+      <div class="recent-wrap">
+        <div class="recent-header">Son Aramalar</div>
+        ${rows}
+      </div>`;
+    resultSection.classList.remove('hidden');
+
+    resultSection.querySelectorAll('.suggestion-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const code = el.dataset.material;
+        searchInput.value = code;
+        searchClear.classList.add('visible');
+        showRecord(records.find(r => r.material === code), true);
+        searchHint.textContent = '';
+      });
+    });
+  }
+
+  function getRecentSearches() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.filter(Boolean).slice(0, RECENT_LIMIT) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveRecentSearch(material) {
+    const code = String(material || '').trim();
+    if (!code) return;
+    const next = [code, ...getRecentSearches().filter(item => item !== code)].slice(0, RECENT_LIMIT);
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
+  }
+
+  function formatStock(record) {
+    if (record.stock == null || record.stock === '') return 'Stok: —';
+    const numeric = parseFloat(String(record.stock).replace(',', '.'));
+    const value = Number.isFinite(numeric)
+      ? numeric.toLocaleString('tr-TR', { maximumFractionDigits: 2 })
+      : String(record.stock);
+    return `Stok: ${value} ${record.unit || ''}`.trim();
+  }
+
+  function copyText(value) {
+    if (!value) return;
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(value)
+        .then(() => showSuccess('Kopyalandı.'))
+        .catch(() => fallbackCopyText(value));
+      return;
+    }
+    fallbackCopyText(value);
+  }
+
+  function fallbackCopyText(value) {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      showSuccess('Kopyalandı.');
+    } catch (_) {
+      showError('Kopyalanamadı.');
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
   /* ═══════════════════════════════════════════════════════════
      FILE UPLOAD & EXCEL PARSING
   ═══════════════════════════════════════════════════════════ */
@@ -1335,6 +1718,7 @@
               bin:         colBin         ? String(row[colBin] || '').trim() : '',
               stock:       colStock       ? String(row[colStock] || '').trim() : '',
               unit:        colUnit        ? String(row[colUnit] || '').trim() : '',
+              searchText:   normalizeSearchText(`${mat} ${colDescription ? String(row[colDescription] || '').trim() : ''}`),
             });
           }
 
@@ -1407,7 +1791,6 @@
     }
   }, 300);
 
-  </script>
   </script>
   <script data-goatcounter="https://fatih183.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>
